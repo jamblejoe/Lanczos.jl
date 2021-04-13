@@ -1,0 +1,7 @@
+name = "Lanczos"
+uuid = "64969066-fb75-4b1b-9f8b-829297d03fd0"
+authors = ["Goran Nakerst <go.nakerst@web.de>"]
+version = "0.1.0"
+
+[deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
