@@ -41,7 +41,7 @@ end
 """
 This functions are too specialized for general purpose usage.
 """
-function lanczos_step(m, H, ψ_i, dt; vargs...)
+function lanczos_step(m::Int, H, ψ_i, dt::Real; vargs...)
     D = length(ψ_i)
     Ks = KrylovSubspace(D, m)
     ψ_f = Vector{ComplexF64}(undef, D)
