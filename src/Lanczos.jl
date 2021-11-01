@@ -1,17 +1,19 @@
 module Lanczos
 
+using CUDA
 using LinearAlgebra
+using MKLSparse
 
-export KrylovSubspace
+export KrylovSubspace, KrylovSubspaceCPU, KrylovSubspaceGPU
 export lanczos_step, lanczos_step!
 
 
-
+abstract type KrylovSubspace end
 
 """
 Cache for Krylov subspace based methods.
 """
-struct KrylovSubspace{rT, cT}
+struct KrylovSubspaceCPU{rT, cT} <: KrylovSubspace
     m::Int
     V::Matrix{cT}
     α::Vector{rT}
@@ -28,15 +30,38 @@ D is the dimension of (Krylov) vectors, while m is the maximal
 number of Krylov vectors that can be stored in the cache.
 
 """
-KrylovSubspace(D::Int, m::Int) = KrylovSubspace(Float64, D, m)
-function KrylovSubspace(rT::Type, D::Int, m::Int)
+KrylovSubspaceCPU(D::Int, m::Int) = KrylovSubspaceCPU(Float64, D, m)
+function KrylovSubspaceCPU(rT::Type, D::Int, m::Int)
     cT = complex(rT)
     V = Matrix{cT}(undef, D, m)
     α = Vector{rT}(undef, m)
     β = Vector{rT}(undef, m-1)
     w = Vector{cT}(undef, D)
-    KrylovSubspace{rT, cT}(m, V, α, β, w)
+    KrylovSubspaceCPU{rT, cT}(m, V, α, β, w)
 end
+
+
+
+struct KrylovSubspaceGPU{rT, cT} <: KrylovSubspace
+    m::Int
+    V::CuMatrix{cT}
+    α::Vector{rT}
+    β::Vector{rT}
+    w::CuVector{cT}
+end
+
+KrylovSubspaceGPU(D::Int, m::Int) = KrylovSubspaceGPU(Float32, D, m)
+function KrylovSubspaceGPU(rT::Type, D::Int, m::Int)
+    cT = complex(rT)
+    V = CuMatrix{cT}(undef, D, m)
+    α = Vector{rT}(undef, m)
+    β = Vector{rT}(undef, m-1)
+    w = CuVector{cT}(undef, D)
+    KrylovSubspaceGPU{rT, cT}(m, V, α, β, w)
+end
+
+
+
 
 """
 This functions are too specialized for general purpose usage.
@@ -56,10 +81,13 @@ The algorithms warns if the maximal Krylov dimension was reached.
 
 Returns the final vector ψ_f and the used Krylov dimension.
 
+ψ_i can be the same vector as ψ_f. ψ_i will then be overwritten
+
 """
 function lanczos_step!(ψ_f::AbstractVector, Ks::KrylovSubspace,
     H, ψ_i::AbstractVector, dt::Real;
-        krylov_dim_min=1, tol=1e-14)
+        krylov_dim_min=1, 
+        tol=1e-14)
 
     krylov_dim_max = Ks.m
     V = Ks.V
@@ -75,6 +103,7 @@ function lanczos_step!(ψ_f::AbstractVector, Ks::KrylovSubspace,
 
 
     v1 = @view V[:,1]
+    v2 = @view V[:,2]
 
     # Think of unrolling this matrix-vector mulitplication
     # into real and imaginary part, i.e. instead of allocating
@@ -84,10 +113,13 @@ function lanczos_step!(ψ_f::AbstractVector, Ks::KrylovSubspace,
     # Update 06.04.20:
     #    when Julia is used with multiple threads this seems to be multithreaded
     #    already
-    mul!(w, H, v1)
+    #mul!(w, H, v1)
+    mul!(v2, H, v1)
 
     # we take the real part here because in exact arithmetics
     # dot(H * v1, v1) is real, as H is real symmetric
+    # 09.08.2021
+    # instead of real symmetric, hermitian should be enough here
     #
     # the dot function can be further optimized using
     # dot(x, A, y) syntax
@@ -97,34 +129,53 @@ function lanczos_step!(ψ_f::AbstractVector, Ks::KrylovSubspace,
     # of v1
     # update 06.04.20:
     #   the code spends very little time in the dot product
-    α[1] = real(dot(w, v1))
+    #α[1] = real(dot(w, v1))
+    α[1] = real(dot(v2, v1))
 
-    w .-= α[1] .* v1
-    β[1] = norm(w)
-    V[:,2] .= w ./ β[1]
+    #w .-= α[1] .* v1
+    v2 .-= α[1] .* v1
+    #β[1] = norm(w)
+    β[1] = norm(v2)
+    #V[:,2] .= w ./ β[1]
+    v2 ./= β[1]
 
     # this is calculating krylov_dim_min Krylov vectors
     for j in 2:(krylov_dim_min-1)
         vj = @view V[:,j]
+        vj_p1 = @view V[:,j+1]
+        
+        #mul!(w, H, vj)
+        mul!(vj_p1, H, vj)
 
-        mul!(w, H, vj)
+        # why real part see above
+        #α[j] = real(dot(w, vj))
+        α[j] = real(dot(vj_p1, vj))
 
-        α[j] = real(dot(w, vj))
-        vj_1 = @view V[:,j-1]
-        w .-= α[j] .* vj .+ β[j-1] .* vj_1
-        β[j] = norm(w)
+        #vj_1 = @view V[:,j-1]
+        vj_m1 = @view V[:,j-1]
+        #w .-= α[j] .* vj .+ β[j-1] .* vj_1
+        vj_p1 .-= α[j] .* vj .+ β[j-1] .* vj_m1
+        #β[j] = norm(w)
+        β[j] = norm(vj_p1)
 
-        V[:,j+1] .= w ./ β[j]
+        #V[:,j+1] .= w ./ β[j]
+        vj_p1 ./= β[j]
     end
 
     # now do the adaptive part
     expidtT1 = nothing
     j = max(2, krylov_dim_min)
-    while j <= krylov_dim_max
+    while j < krylov_dim_max
 
         vj = @view V[:,j]
-        mul!(w, H, vj)
-        α[j] = real(dot(w, vj))
+        vj_p1 = @view V[:,j+1]
+
+        #mul!(w, H, vj)
+        mul!(vj_p1, H, vj)
+
+        # why real part see above
+        #α[j] = real(dot(w, vj))
+        α[j] = real(dot(vj_p1, vj))
 
         # check for convergence and abort if converged
         # we specialize the matrix structure to hit improved eigenvalue
@@ -136,20 +187,38 @@ function lanczos_step!(ψ_f::AbstractVector, Ks::KrylovSubspace,
             break
         end
 
-
+        #=
         vj_1 = @view V[:,j-1]
         w .-= α[j] .* vj .+ β[j-1] .* vj_1
         β[j] = norm(w)
         V[:,j+1] .= w ./ β[j]
+        =#
+
+        #vj_1 = @view V[:,j-1]
+        vj_m1 = @view V[:,j-1]
+        #w .-= α[j] .* vj .+ β[j-1] .* vj_1
+        vj_p1 .-= α[j] .* vj .+ β[j-1] .* vj_m1
+        #β[j] = norm(w)
+        β[j] = norm(vj_p1)
+
+        #V[:,j+1] .= w ./ β[j]
+        vj_p1 ./= β[j]
 
         j += 1
     end
 
-    if j >= krylov_dim_max
-        @warn("max krylov dimesions reached, tol = $(abs(expidtT1[j]))")
+    V_krylov = if j >= krylov_dim_max
+        @warn("max krylov dimesions reached, tol = $(abs(expidtT1[j-1]))")
+        @view V[:, 1:(j-1)]
+    else
+        @view V[:, 1:j]
     end
 
-    V_krylov = @view V[:, 1:j]
+    #V_krylov = @view V[:, 1:j]
+
+    # create type instability
+    # hope this is fine, because of function barrier mul!
+    expidtT1 = typeof(V_krylov) <: CuArray ? CuArray(expidtT1) : expidtT1
     mul!(ψ_f, V_krylov, expidtT1)
 
 
@@ -161,6 +230,10 @@ function lanczos_step!(ψ_f::AbstractVector, Ks::KrylovSubspace,
 
 
 end
+
+
+
+
 
 
 
