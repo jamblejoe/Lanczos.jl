@@ -4,21 +4,21 @@ using CUDA
 using LinearAlgebra
 using MKLSparse
 
-export KrylovSubspace, KrylovSubspaceCPU, KrylovSubspaceGPU
+export KrylovSubspace, KrylovSubspaceGPU
 export lanczos_step, lanczos_step!
 
 
-abstract type KrylovSubspace end
+abstract type AbstractKrylovSubspace end
 
 """
 Cache for Krylov subspace based methods.
 """
-struct KrylovSubspaceCPU{rT, cT} <: KrylovSubspace
+struct KrylovSubspace{rT, cT} <: AbstractKrylovSubspace
     m::Int
     V::Matrix{cT}
     α::Vector{rT}
     β::Vector{rT}
-    w::Vector{cT}
+    #w::Vector{cT}
 end
 
 """
@@ -30,24 +30,24 @@ D is the dimension of (Krylov) vectors, while m is the maximal
 number of Krylov vectors that can be stored in the cache.
 
 """
-KrylovSubspaceCPU(D::Int, m::Int) = KrylovSubspaceCPU(Float64, D, m)
-function KrylovSubspaceCPU(rT::Type, D::Int, m::Int)
+KrylovSubspace(D::Int, m::Int) = KrylovSubspace(Float64, D, m)
+function KrylovSubspace(rT::Type, D::Int, m::Int)
     cT = complex(rT)
     V = Matrix{cT}(undef, D, m)
     α = Vector{rT}(undef, m)
     β = Vector{rT}(undef, m-1)
-    w = Vector{cT}(undef, D)
-    KrylovSubspaceCPU{rT, cT}(m, V, α, β, w)
+    #w = Vector{cT}(undef, D)
+    KrylovSubspace{rT, cT}(m, V, α, β)
 end
 
 
 
-struct KrylovSubspaceGPU{rT, cT} <: KrylovSubspace
+struct KrylovSubspaceGPU{rT, cT} <: AbstractKrylovSubspace
     m::Int
     V::CuMatrix{cT}
     α::Vector{rT}
     β::Vector{rT}
-    w::CuVector{cT}
+    #w::CuVector{cT}
 end
 
 KrylovSubspaceGPU(D::Int, m::Int) = KrylovSubspaceGPU(Float32, D, m)
@@ -56,8 +56,8 @@ function KrylovSubspaceGPU(rT::Type, D::Int, m::Int)
     V = CuMatrix{cT}(undef, D, m)
     α = Vector{rT}(undef, m)
     β = Vector{rT}(undef, m-1)
-    w = CuVector{cT}(undef, D)
-    KrylovSubspaceGPU{rT, cT}(m, V, α, β, w)
+    #w = CuVector{cT}(undef, D)
+    KrylovSubspaceGPU{rT, cT}(m, V, α, β)
 end
 
 
@@ -84,7 +84,7 @@ Returns the final vector ψ_f and the used Krylov dimension.
 ψ_i can be the same vector as ψ_f. ψ_i will then be overwritten
 
 """
-function lanczos_step!(ψ_f::AbstractVector, Ks::KrylovSubspace,
+function lanczos_step!(ψ_f::AbstractVector, Ks::AbstractKrylovSubspace,
     H, ψ_i::AbstractVector, dt::Real;
         krylov_dim_min=1, 
         tol=1e-14)
@@ -93,7 +93,7 @@ function lanczos_step!(ψ_f::AbstractVector, Ks::KrylovSubspace,
     V = Ks.V
     α = Ks.α
     β = Ks.β
-    w = Ks.w
+    #w = Ks.w
 
 
 
