@@ -1,10 +1,9 @@
 module Lanczos
 
-using CUDA
 using LinearAlgebra
-using MKLSparse
 
-export KrylovSubspace, KrylovSubspaceGPU
+#export KrylovSubspace, KrylovSubspaceGPU
+export KrylovSubspace
 export lanczos_step, lanczos_step!
 
 
@@ -41,7 +40,7 @@ function KrylovSubspace(rT::Type, D::Int, m::Int)
 end
 
 
-
+#=
 struct KrylovSubspaceGPU{rT, cT} <: AbstractKrylovSubspace
     m::Int
     V::CuMatrix{cT}
@@ -59,7 +58,7 @@ function KrylovSubspaceGPU(rT::Type, D::Int, m::Int)
     #w = CuVector{cT}(undef, D)
     KrylovSubspaceGPU{rT, cT}(m, V, α, β)
 end
-
+=#
 
 
 
@@ -130,6 +129,9 @@ function lanczos_step!(ψ_f::AbstractVector, Ks::AbstractKrylovSubspace,
     # update 06.04.20:
     #   the code spends very little time in the dot product
     #α[1] = real(dot(w, v1))
+    # update 01.11.2021:
+    # the GPU code spents significant amount of time in the 
+    # dot and norm functions
     α[1] = real(dot(v2, v1))
 
     #w .-= α[1] .* v1
@@ -218,7 +220,7 @@ function lanczos_step!(ψ_f::AbstractVector, Ks::AbstractKrylovSubspace,
 
     # create type instability
     # hope this is fine, because of function barrier mul!
-    expidtT1 = typeof(V_krylov) <: CuArray ? CuArray(expidtT1) : expidtT1
+    #expidtT1 = typeof(V_krylov) <: CuArray ? CuArray(expidtT1) : expidtT1
     mul!(ψ_f, V_krylov, expidtT1)
 
 
